@@ -272,24 +272,24 @@ void bfs(vector<vector<int>>& graph, int start, vector<bool>& visited) {
     q.push(start);
     visited[start] = true;
 
-    #pragma omp parallel
-    {
-        #pragma omp single
+    while (!q.empty()) {
+        int vertex;
+        #pragma omp parallel
         {
-            while (!q.empty()) {
-                int vertex = q.front();
-                cout << vertex << " "<<endl;
+            #pragma omp single
+            {
+                vertex = q.front();
                 q.pop();
+            }
 
-                #pragma omp task firstprivate(vertex)
-                {
-                    for (int neighbor : graph[vertex]) {
-                        if (!visited[neighbor]) {
-                            q.push(neighbor);
-                            visited[neighbor] = true;
-                            #pragma omp task
-                            bfs(graph, neighbor, visited);
-                        }
+            #pragma omp for
+            for (int i = 0; i < graph[vertex].size(); ++i) {
+                int neighbor = graph[vertex][i];
+                if (!visited[neighbor]) {
+                    #pragma omp critical
+                    {
+                        q.push(neighbor);
+                        visited[neighbor] = true;
                     }
                 }
             }
@@ -306,24 +306,28 @@ void dfs(vector<vector<int>>& graph, int start, vector<bool>& visited) {
     stack<int> s;
     s.push(start);
     visited[start] = true;
-#pragma omp parallel
-    {
-#pragma omp single
+
+    while (!s.empty()) {
+        int vertex;
+        #pragma omp parallel
         {
-            while (!s.empty()) {
-                int vertex = s.top();
-                cout << vertex << " "<<endl;
+            #pragma omp single
+            {
+                vertex = s.top();
                 s.pop();
-#pragma omp task firstprivate(vertex)
-                {
-                    for (int neighbor : graph[vertex]) {
-                        if (!visited[neighbor]) {
-                            s.push(neighbor);
-                            visited[neighbor] = true;
-#pragma omp task
-                            dfs(graph, neighbor, visited);
-                        }
+            }
+
+            #pragma omp for
+            for (int i = 0; i < graph[vertex].size(); ++i) {
+                int neighbor = graph[vertex][i];
+                if (!visited[neighbor]) {
+                    #pragma omp critical
+                    {
+                        s.push(neighbor);
+                        visited[neighbor] = true;
                     }
+                    #pragma omp task
+                    dfs(graph, neighbor, visited);
                 }
             }
         }
@@ -410,6 +414,10 @@ int main() {
 
     return 0;
 }
+
+// how to run
+// nvcc cuda_file.cu -o cuda_program
+
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #include <iostream>
 #include <vector>
@@ -524,8 +532,20 @@ void merge(vector<int>& arr, int l, int m, int r) {
 void merge_sort(vector<int>& arr, int l, int r) {
     if (l < r) {
         int m = l + (r - l) / 2;
-        merge_sort(arr, l, m);
-        merge_sort(arr, m + 1, r);
+
+        #pragma omp parallel sections
+        {
+            #pragma omp section
+            {
+                merge_sort(arr, l, m);
+            }
+
+            #pragma omp section
+            {
+                merge_sort(arr, m + 1, r);
+            }
+        }
+
         merge(arr, l, m, r);
     }
 }
@@ -557,3 +577,60 @@ int main() {
     return 0;
 }
 
+---------------------------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------
+
+5> parallel db
+
+#include <iostream>
+#include <sqlite3.h>
+#include <omp.h>
+
+static int callback(void *data, int argc, char **argv, char **azColName) {
+    for (int i = 0; i < argc; i++) {
+        std::cout << azColName[i] << " = " << (argv[i] ? argv[i] : "NULL") << std::endl;
+    }
+    std::cout << std::endl;
+    return 0;
+}
+
+int main() {
+    sqlite3 *db;
+    char *zErrMsg = 0;
+    int rc;
+    const char *sql;
+    const char *data = "Callback function called";
+
+    rc = sqlite3_open("test.db", &db);
+
+    if (rc) {
+        std::cerr << "Can't open database: " << sqlite3_errmsg(db) << std::endl;
+        sqlite3_close(db);
+        return 1;
+    }
+
+    sql = "SELECT * FROM mytable";
+
+    #pragma omp parallel num_threads(4)
+    {
+        sqlite3_exec(db, sql, callback, (void *)data, &zErrMsg);
+    }
+
+    sqlite3_close(db);
+    return 0;
+}
+
+// how to run 
+// sudo apt-get install libsqlite3-dev
+// g++ -o program main.cpp -lsqlite3 -fopenmp
+// sqlite3 test.db
+// CREATE TABLE mytable (
+//     id INTEGER PRIMARY KEY,
+//     name TEXT,
+//     age INTEGER
+// );
+
+// INSERT INTO mytable (name, age) VALUES ('John', 25);
+// INSERT INTO mytable (name, age) VALUES ('Alice', 30);
+// INSERT INTO mytable (name, age) VALUES ('Bob', 35);
+// .exit
